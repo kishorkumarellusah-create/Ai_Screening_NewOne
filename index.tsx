@@ -24,6 +24,7 @@ interface RepoData {
 interface EntryPoint {
   file: string;
   description: string;
+  isMain?: boolean;
 }
 
 interface Analysis {
@@ -33,6 +34,7 @@ interface Analysis {
   recommendations: string;
   entryPoints: EntryPoint[];
   architecture: string;
+  mainFilePath: string;
 }
 
 const App: React.FC = () => {
@@ -96,32 +98,45 @@ const App: React.FC = () => {
     setAnalyzing(true);
     setAnalysis(null);
     try {
-      // Fetch README and file list if possible to identify starting points
       let readme = "No README found.";
       let fileList = "No file list found.";
+      let packageJson = "No package.json found.";
       
       try {
+        // Fetch README
         const readmeRes = await fetch(`https://api.github.com/repos/${repo.full_name}/readme`, {
           headers: { 'Accept': 'application/vnd.github.v3.raw' }
         });
         if (readmeRes.ok) readme = await readmeRes.text();
         
+        // Fetch root file list
         const treeRes = await fetch(`https://api.github.com/repos/${repo.full_name}/contents/`);
         if (treeRes.ok) {
           const contents = await treeRes.json();
-          fileList = contents.map((c: any) => c.name).join(', ');
+          fileList = contents.map((c: any) => `${c.type === 'dir' ? '[DIR] ' : ''}${c.name}`).join(', ');
         }
-      } catch (e) {}
+
+        // Specifically look for package.json or main config files to find the entry point
+        const pkgRes = await fetch(`https://api.github.com/repos/${repo.full_name}/contents/package.json`, {
+          headers: { 'Accept': 'application/vnd.github.v3.raw' }
+        });
+        if (pkgRes.ok) {
+          packageJson = await pkgRes.text();
+        }
+      } catch (e) {
+        console.warn("Supplementary file fetch failed", e);
+      }
 
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const prompt = `
-        Analyze the following GitHub repository information and provide a detailed structured insight, focusing specifically on how a new developer should start with the project.
+        Analyze the following GitHub repository information. Your goal is to identify the CRITICAL entry point (main file path) and project architecture.
         
         Repository: ${repo.full_name}
         Description: ${repo.description}
         Primary Language: ${repo.language}
         Root Files: ${fileList}
-        README Sample: ${readme.substring(0, 3000)}
+        package.json: ${packageJson.substring(0, 2000)}
+        README Sample: ${readme.substring(0, 2000)}
 
         Return your response as a JSON object with the following structure:
         {
@@ -129,10 +144,11 @@ const App: React.FC = () => {
           "techStack": ["List of core technologies"],
           "useCases": ["Case 1", "Case 2"],
           "recommendations": "Suggestion to improve the project.",
-          "architecture": "High-level overview of the code structure (e.g. monolithic, microservices, MVC).",
+          "architecture": "High-level overview (e.g. Next.js App Router, Express API, Python CLI).",
+          "mainFilePath": "The literal path to the primary execution file (e.g. src/index.ts, app/page.tsx, main.py).",
           "entryPoints": [
-            { "file": "path/to/main/entry", "description": "Why this is the starting point (e.g. main loop, server initialization, router)." },
-            { "file": "path/to/config", "description": "Where settings live." }
+            { "file": "path/to/main/entry", "description": "Why this is the starting point.", "isMain": true },
+            { "file": "path/to/config", "description": "Where settings live.", "isMain": false }
           ]
         }
       `;
@@ -166,7 +182,7 @@ const App: React.FC = () => {
       {/* Sidebar */}
       <aside className="w-80 glass flex flex-col border-r border-gray-800">
         <div className="p-6 border-b border-gray-800 flex items-center gap-3">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">G</div>
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold shadow-[0_0_15px_rgba(37,99,235,0.4)]">G</div>
           <h1 className="text-xl font-bold tracking-tight text-white">GitSync <span className="text-blue-500">AI</span></h1>
         </div>
 
@@ -175,7 +191,7 @@ const App: React.FC = () => {
             <input
               type="text"
               placeholder="owner/repo (e.g. facebook/react)"
-              className={`w-full bg-[#0d1117] border rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all ${error ? 'border-red-500' : 'border-gray-700'}`}
+              className={`w-full bg-[#0d1117] border rounded-md py-2 px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all placeholder:text-gray-600 ${error ? 'border-red-500' : 'border-gray-700'}`}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && searchQuery && fetchRepo(searchQuery)}
@@ -223,7 +239,7 @@ const App: React.FC = () => {
         
         <div className="p-6 border-t border-gray-800 flex items-center justify-between">
           <span className="text-xs text-gray-500">Gemini 3 Pro Active</span>
-          <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]"></div>
+          <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)] animate-pulse"></div>
         </div>
       </aside>
 
@@ -236,18 +252,18 @@ const App: React.FC = () => {
               <div className="flex items-center gap-4">
                 <img src={selectedRepo.owner.avatar_url} className="w-16 h-16 rounded-xl border-2 border-gray-800 shadow-xl" alt={selectedRepo.owner.login} />
                 <div>
-                  <h1 className="text-3xl font-bold text-white mb-1">{selectedRepo.name}</h1>
-                  <a href={selectedRepo.html_url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline flex items-center gap-1 text-sm">
+                  <h1 className="text-3xl font-bold text-white mb-1 tracking-tight">{selectedRepo.name}</h1>
+                  <a href={selectedRepo.html_url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline flex items-center gap-1 text-sm font-medium">
                     {selectedRepo.full_name} <i data-lucide="external-link" className="w-3 h-3"></i>
                   </a>
                 </div>
               </div>
               <div className="flex gap-4">
-                <div className="bg-gray-800/50 border border-gray-700 px-4 py-2 rounded-lg text-center">
+                <div className="bg-gray-800/50 border border-gray-700 px-4 py-2 rounded-lg text-center backdrop-blur-sm">
                   <div className="text-sm font-bold text-white">{selectedRepo.stargazers_count.toLocaleString()}</div>
                   <div className="text-[10px] text-gray-500 uppercase tracking-widest">Stars</div>
                 </div>
-                <div className="bg-gray-800/50 border border-gray-700 px-4 py-2 rounded-lg text-center">
+                <div className="bg-gray-800/50 border border-gray-700 px-4 py-2 rounded-lg text-center backdrop-blur-sm">
                   <div className="text-sm font-bold text-white">{selectedRepo.forks_count.toLocaleString()}</div>
                   <div className="text-[10px] text-gray-500 uppercase tracking-widest">Forks</div>
                 </div>
@@ -256,11 +272,6 @@ const App: React.FC = () => {
 
             {/* AI Analysis Section */}
             <div className="relative">
-              <h2 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                <i data-lucide="compass" className="text-blue-400 w-5 h-5"></i>
-                Project Navigation & Architecture
-              </h2>
-
               {analyzing ? (
                 <div className="flex flex-col items-center justify-center py-20 space-y-6">
                   <div className="relative">
@@ -268,12 +279,12 @@ const App: React.FC = () => {
                     <i data-lucide="search" className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-blue-400 w-8 h-8 animate-pulse"></i>
                   </div>
                   <div className="text-center">
-                    <p className="text-xl font-medium text-white mb-2">Finding the Starting Point...</p>
-                    <p className="text-gray-400 max-w-xs mx-auto">Gemini is crawling the file structure to identify project entry points and architectural patterns.</p>
+                    <p className="text-xl font-medium text-white mb-2">Parsing Project Metadata...</p>
+                    <p className="text-gray-400 max-w-xs mx-auto text-sm">Identifying main entry points, parsing package configurations, and mapping architectural patterns.</p>
                   </div>
                 </div>
               ) : analysis ? (
-                <div className="space-y-8">
+                <div className="space-y-8 animate-in fade-in duration-500">
                   {/* Summary & Arch Row */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <div className="md:col-span-2 glass p-6 rounded-xl border-l-4 border-l-blue-500">
@@ -286,19 +297,38 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Entry Points Section - FIX FOR "Starting Point not created" */}
+                  {/* Main Entry Point Highlight */}
+                  <div className="bg-blue-600/10 border border-blue-500/30 p-6 rounded-2xl relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                      <i data-lucide="play-circle" className="w-24 h-24 text-blue-400"></i>
+                    </div>
+                    <div className="relative z-10">
+                      <div className="flex items-center gap-2 mb-4">
+                        <span className="px-2 py-0.5 bg-blue-500 text-[10px] font-black uppercase tracking-tighter rounded text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]">Main File</span>
+                        <h3 className="text-sm font-bold text-blue-400 uppercase tracking-widest">Primary Entry Point</h3>
+                      </div>
+                      <div className="flex items-baseline gap-3">
+                        <code className="text-2xl font-mono text-white font-bold bg-black/40 px-3 py-1 rounded-lg border border-white/10">{analysis.mainFilePath || "Not detected"}</code>
+                        <span className="text-gray-500 text-xs italic">Identified from file structure & package.json</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Entry Points Section */}
                   <div className="space-y-4">
-                    <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
-                      <i data-lucide="flag" className="w-4 h-4"></i>
-                      Project Entry Points
+                    <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2 px-1">
+                      <i data-lucide="navigation" className="w-4 h-4"></i>
+                      Navigational Map
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {analysis.entryPoints.map((entry, idx) => (
-                        <div key={idx} className="bg-gray-800/40 border border-gray-700 p-4 rounded-xl hover:border-blue-500/50 transition-colors group">
+                        <div key={idx} className={`bg-gray-800/40 border p-4 rounded-xl hover:border-blue-500/50 transition-colors group ${entry.isMain ? 'border-blue-500/30' : 'border-gray-700'}`}>
                           <div className="flex items-start gap-3">
-                            <i data-lucide="file-code" className="w-5 h-5 text-blue-400 mt-0.5"></i>
+                            <div className={`p-2 rounded-lg ${entry.isMain ? 'bg-blue-500/10' : 'bg-gray-700/30'}`}>
+                              <i data-lucide={entry.isMain ? "play" : "file-code"} className={`w-4 h-4 ${entry.isMain ? 'text-blue-400' : 'text-gray-400'}`}></i>
+                            </div>
                             <div>
-                              <div className="text-blue-400 font-mono text-sm font-bold mb-1 group-hover:underline cursor-pointer">{entry.file}</div>
+                              <div className="text-blue-400 font-mono text-sm font-bold mb-1 group-hover:underline cursor-pointer truncate max-w-[280px]">{entry.file}</div>
                               <p className="text-xs text-gray-400 leading-normal">{entry.description}</p>
                             </div>
                           </div>
@@ -344,7 +374,7 @@ const App: React.FC = () => {
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-4xl mx-auto">
             <div className="relative mb-8">
-              <div className="w-24 h-24 bg-blue-600/20 rounded-3xl flex items-center justify-center shadow-2xl">
+              <div className="w-24 h-24 bg-blue-600/10 rounded-3xl flex items-center justify-center shadow-2xl border border-blue-500/20">
                 <i data-lucide="github" className="w-12 h-12 text-blue-500"></i>
               </div>
               <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center border-4 border-[#0d1117]">
@@ -352,7 +382,7 @@ const App: React.FC = () => {
               </div>
             </div>
             
-            <h2 className="text-4xl font-black text-white mb-4 tracking-tight">Sync Your <span className="bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">Project Intelligence</span></h2>
+            <h2 className="text-4xl font-black text-white mb-4 tracking-tight text-center">Sync Your <span className="bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500 bg-clip-text text-transparent">Project Intelligence</span></h2>
             <p className="text-gray-400 text-center max-w-md text-lg mb-10 leading-relaxed">
               Connect with GitHub repositories to automatically discover entry points, architectural patterns, and specialized tech insights.
             </p>
@@ -381,14 +411,14 @@ const App: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div onClick={() => fetchRepo('facebook/react')} className="repo-card glass p-4 rounded-xl cursor-pointer text-left flex items-center justify-between group">
                     <div>
-                      <p className="text-[10px] text-blue-500 font-bold mb-0.5">Frontend Library</p>
+                      <p className="text-[10px] text-blue-500 font-bold mb-0.5 uppercase">Core Library</p>
                       <p className="font-bold text-white group-hover:text-blue-400 transition-colors">facebook/react</p>
                     </div>
                     <i data-lucide="chevron-right" className="w-4 h-4 text-gray-700 group-hover:text-blue-500"></i>
                   </div>
                   <div onClick={() => fetchRepo('shadcn-ui/ui')} className="repo-card glass p-4 rounded-xl cursor-pointer text-left flex items-center justify-between group">
                     <div>
-                      <p className="text-[10px] text-blue-500 font-bold mb-0.5">Component Library</p>
+                      <p className="text-[10px] text-blue-500 font-bold mb-0.5 uppercase">Framework</p>
                       <p className="font-bold text-white group-hover:text-blue-400 transition-colors">shadcn-ui/ui</p>
                     </div>
                     <i data-lucide="chevron-right" className="w-4 h-4 text-gray-700 group-hover:text-blue-500"></i>
