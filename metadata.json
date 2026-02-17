@@ -1,0 +1,5 @@
+{
+  "description": "A GitHub repository synchronization and AI analysis dashboard using Gemini 3 Pro.",
+  "requestFramePermissions": [],
+  "name": "App"
+}
